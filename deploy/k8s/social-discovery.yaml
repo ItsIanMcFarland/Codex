@@ -1,0 +1,122 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: social-discovery
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: social-discovery-api
+  namespace: social-discovery
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: social-discovery-api
+  template:
+    metadata:
+      labels:
+        app: social-discovery-api
+    spec:
+      containers:
+        - name: api
+          image: ghcr.io/example/social-discovery-service:latest
+          ports:
+            - containerPort: 8000
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: social-discovery-secrets
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              value: redis://redis-master:6379/0
+            - name: ADMIN_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: social-discovery-secrets
+                  key: ADMIN_API_KEYS
+            - name: SUBMITTER_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: social-discovery-secrets
+                  key: SUBMITTER_API_KEYS
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: social-discovery-api
+  namespace: social-discovery
+spec:
+  type: ClusterIP
+  selector:
+    app: social-discovery-api
+  ports:
+    - port: 80
+      targetPort: 8000
+      protocol: TCP
+      name: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: social-discovery-worker
+  namespace: social-discovery
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: social-discovery-worker
+  template:
+    metadata:
+      labels:
+        app: social-discovery-worker
+    spec:
+      containers:
+        - name: worker
+          image: ghcr.io/example/social-discovery-service:latest
+          command: ["python", "-m", "social_discovery_service.cli", "worker"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: social-discovery-secrets
+                  key: DATABASE_URL
+            - name: REDIS_URL
+              value: redis://redis-master:6379/0
+            - name: ADMIN_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: social-discovery-secrets
+                  key: ADMIN_API_KEYS
+            - name: SUBMITTER_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: social-discovery-secrets
+                  key: SUBMITTER_API_KEYS
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: social-discovery-metrics
+  namespace: social-discovery
+spec:
+  selector:
+    matchLabels:
+      app: social-discovery-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

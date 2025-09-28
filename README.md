@@ -1,99 +1,168 @@
-# Hotel Social Discover
+# Social Discovery Service
 
-Hotel Social Discover is an asyncio friendly crawler that inspects hotel websites to identify social media profiles. It respects robots.txt directives, performs optional JavaScript rendering via Playwright, and outputs normalized social profile links.
+The **Social Discovery Service** is an enterprise-ready microservice for discovering social media profiles for thousands of hotel domains. It combines an API-driven job queue, asyncio-based workers, and a PostgreSQL-backed persistence layer to operate safely at scale.
 
-## Features
+## Architecture Overview
 
-- Async HTTP fetching with retries using `httpx` and `tenacity`.
-- Robots.txt compliance for the `hotel-social-discover` user agent.
-- Heuristic detection of JavaScript-heavy pages with optional Playwright rendering (headless by default).
-- Extraction and normalization of social profile links (Facebook, Instagram, X/Twitter, YouTube, TikTok, LinkedIn, and others).
-- Optional PNG snapshots from Playwright for debugging.
-- Incremental resume capability using a JSON checkpoint file.
-- CSV input/output with detailed metadata and JSON summary export.
-- Structured logging with rotating file handlers.
+- **API & CLI** – Submit discovery jobs via a FastAPI-powered REST interface or the Typer CLI.
+- **Async Workers** – HTTPX + Playwright workers crawl hotel homepages, follow politeness policies, and normalize social links.
+- **Distributed Scheduling** – Optional Celery/RQ integration enables horizontal worker scaling with Redis brokers.
+- **Observability** – Structured logging, Prometheus metrics, and health endpoints for production monitoring.
+- **Resilience** – Checkpointing, retry policies, proxy rotation, and per-domain rate limiting to handle flaky sites.
+- **Security** – Role-based API keys gate access to administrative and submitter operations.
 
-## Installation
+## Getting Started
+
+### Prerequisites
+
+- Python 3.11+
+- Docker (optional but recommended for local orchestration)
+- Playwright browsers (`playwright install --with-deps firefox`)
+
+### Local Development (Docker Compose)
+
+```bash
+docker compose up --build
+```
+
+This launches the API, worker, PostgreSQL, and Redis. The API is available at `http://localhost:8000` and metrics at `http://localhost:8000/metrics`.
+
+Seed jobs with the CLI:
+
+```bash
+docker compose run --rm api python -m social_discovery_service.cli enqueue demo-batch examples/hotels.csv --metadata '{"source": "demo"}'
+```
+
+Query job status:
+
+```bash
+curl -H "X-API-Key: admin-key" http://localhost:8000/api/jobs/<job_id>
+```
+
+### Running Locally Without Docker
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
-playwright install --with-deps chromium
+playwright install --with-deps firefox
+export DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/social_discovery
+export REDIS_URL=redis://localhost:6379/0
+export ADMIN_API_KEYS=local-admin
+export SUBMITTER_API_KEYS=local-submitter
+alembic upgrade head
+uvicorn social_discovery_service.main:app --host 0.0.0.0 --port 8000
 ```
 
-> ⚠️ Playwright browser downloads are large. Skip the install command above if you will only perform static HTTP fetching.
-
-## Configuration
-
-Configuration values are loaded from environment variables and a `.env` file. See the bundled `.env` for defaults.
-
-Key options:
-
-- `HSD_CONCURRENCY`: Maximum concurrent tasks (default 10).
-- `HSD_RATE_LIMIT_PER_DOMAIN`: Minimum seconds between requests to the same domain (default 2.0).
-- `HSD_USER_AGENT`: User agent string for both HTTP requests and robots.txt checks.
-- `HSD_CHECKPOINT_PATH`: Path to resume checkpoint JSON file (default `.hotel_social_discover_checkpoint.json`).
-
-## Usage
+Start a worker in another terminal:
 
 ```bash
-python cli.py crawl \
-  --input examples/hotels.csv \
-  --output results.csv \
-  --concurrency 10 \
-  --timeout 12 \
-  --headful=false \
-  --proxy-file proxies.txt \
-  --resume=true \
-  --save-snapshots
+python -m social_discovery_service.cli worker
 ```
 
-### Arguments
-
-- `--input`: Path to CSV file containing hotel records. Must include `hotel_id`, `hotel_name`, and `url` columns.
-- `--output`: Path to CSV output file (required).
-- `--concurrency`: Maximum concurrent crawls (overrides default).
-- `--timeout`: Request timeout in seconds (default from config).
-- `--headful`: `true` or `false` to run Playwright in headful mode. Rendering is disabled unless `--render` is also passed.
-- `--render`: Enable Playwright rendering when heuristics indicate dynamic content.
-- `--proxy-file`: Optional path to newline-separated proxy URLs.
-- `--resume`: Enable checkpoint resume (default true). Use `--force` to ignore checkpoint entries.
-- `--save-snapshots`: Save rendered page screenshots alongside CSV output.
-- `--summary-json`: Path to JSON summary file (default `results.summary.json`).
-
-## CSV Input
-
-Input CSV columns must include:
-
-```
-hotel_id,hotel_name,url
-```
-
-Extra columns are preserved during processing.
-
-## Output
-
-The output CSV contains:
-
-```
-hotel_id,hotel_name,url,canonical_url,http_status,response_time_ms,found:facebook,facebook_url,found:instagram,instagram_url,found:x,x_url,found:youtube,youtube_url,found:tiktok,tiktok_url,found:linkedin,linkedin_url,other_socials,page_snapshot_path,last_checked_utc_iso,error_message
-```
-
-## Legal & Ethical Notice
-
-**Use this tool only on websites that you own or are authorized to crawl.** Respect each website's terms of service, robots.txt directives, and rate limits. Never attempt to bypass CAPTCHAs, authentication gates, or other access controls. The authors accept no responsibility for misuse.
-
-## Development
-
-Run tests with:
+### CLI Commands
 
 ```bash
-pytest
+python -m social_discovery_service.cli --help
+python -m social_discovery_service.cli show-config
+python -m social_discovery_service.cli enqueue nightly examples/hotels.csv
+python -m social_discovery_service.cli load-proxies proxies.txt
+python -m social_discovery_service.cli migrate upgrade
 ```
 
-## Example
+### REST API
+
+- `POST /api/jobs/batch` – Submit a batch of hotel domains (`X-API-Key` header required).
+- `GET /api/jobs/{job_id}` – Inspect job status.
+- `GET /api/jobs/{job_id}/results` – Retrieve discovered links.
+- `GET /api/health` – Health check.
+- `GET /metrics` – Prometheus metrics scrape endpoint.
+
+OpenAPI docs: `http://localhost:8000/docs`
+
+### Database Schema & Migrations
+
+- Alembic migrations live in `social_discovery_service/db/migrations`.
+- A printable schema snapshot is available at `social_discovery_service/db/schema.sql`.
+- Run migrations with `python -m social_discovery_service.cli migrate upgrade` or via Docker entrypoint.
+
+### Proxy Management
+
+Provide a newline-separated list of SOCKS5/HTTPS proxies. Proxies are rotated automatically and quarantined after repeated failures. Load proxies through the CLI:
+
+```bash
+python -m social_discovery_service.cli load-proxies config/proxies.txt
+```
+
+### Distributed Workers
+
+- **Celery**: Import `social_discovery_service.worker.celery_app` in your worker deployment. Extend `process_job_task` to orchestrate async workers or schedule CLI executions.
+- **RQ**: Use `social_discovery_service.worker.rq_worker.enqueue_with_rq(job_id)` to drop jobs onto an RQ queue.
+
+### Monitoring & Alerts
+
+Key Prometheus metrics:
+
+- `social_discovery_fetch_attempts_total`
+- `social_discovery_fetch_latency_seconds`
+- `social_discovery_links_discovered_total`
+- `social_discovery_jobs_in_progress`
+- `social_discovery_worker_errors_total`
+
+Integrate the sample `ServiceMonitor` in `deploy/k8s/social-discovery.yaml` for Prometheus Operator setups.
+
+### Load Testing
+
+A simple Locust script lives in `load_tests/locustfile.py`:
+
+```bash
+locust -f load_tests/locustfile.py --host http://localhost:8000
+```
+
+Tune RPS to estimate capacity; 10 worker pods typically sustain ~1k domains/hour assuming 3 HTTP fetches/domain and commodity proxies. Budget proxy bandwidth (~1 GB per 5k domains) and Playwright CPU (1 core per active worker).
+
+### Kubernetes Deployment
+
+Use `deploy/k8s/social-discovery.yaml` as a baseline. It deploys API and worker deployments, service definitions, and a Prometheus `ServiceMonitor`. Inject secrets via `social-discovery-secrets` for database credentials and API keys.
+
+### Test Data & Expected Output
+
+Sample hotel domains live in `examples/hotels.csv`. After enqueuing the sample batch, `GET /api/jobs/{job_id}/results` returns normalized social links with platform metadata. `tests/` contains unit tests for the HTML parser and storage helpers inherited from the legacy project.
+
+### Cost & Throughput Guidance
+
+- **Workers**: Start with 2 CPU / 4 GB RAM per worker pod when Playwright rendering is enabled.
+- **Database**: PostgreSQL `db.m6g.large`-class instances comfortably handle ~50 req/s with the provided indexes.
+- **Redis**: A single cache.m6g.large handles queue fan-out for thousands of jobs.
+- **Bandwidth**: Expect ~200 KB per fetch; plan proxies accordingly.
+
+### Security Notes
+
+- API requests must include `X-API-Key` matching a configured admin or submitter key.
+- Do **not** attempt CAPTCHA bypass; jobs encountering CAPTCHAs are marked failed for manual review.
+- Enable TLS and perimeter firewalls in production environments.
+
+## Repository Layout
 
 ```
-python cli.py crawl --input examples/hotels.csv --output results.csv --render --save-snapshots
+├── Dockerfile
+├── docker-compose.yml
+├── docker/entrypoint.sh
+├── deploy/k8s/
+├── social_discovery_service/
+│   ├── api/
+│   ├── config.py
+│   ├── cli.py
+│   ├── db/
+│   ├── jobs/
+│   ├── monitoring/
+│   ├── security/
+│   └── worker/
+├── load_tests/
+├── hotel_social_discover/  # HTML parsing + heuristics
+└── tests/
 ```
+
+## License
+
+MIT
