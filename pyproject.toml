@@ -3,9 +3,9 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "hotel-social-discover"
+name = "social-discovery-service"
 version = "0.1.0"
-description = "Async crawler to discover hotel social media profiles"
+description = "Enterprise-ready microservice for discovering hotel social links"
 readme = "README.md"
 authors = [{name = "Hotel Social Discover"}]
 license = {text = "MIT"}
@@ -15,16 +15,31 @@ dependencies = [
     "playwright>=1.40",
     "beautifulsoup4",
     "lxml",
-    "aiofiles",
-    "tenacity",
     "python-dotenv",
-    "pandas",
+    "pydantic>=1.10",
+    "fastapi>=0.110",
+    "uvicorn[standard]",
+    "typer[all]",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg",
+    "alembic",
+    "prometheus-client",
+    "celery",
+    "rq",
+    "redis",
     "tldextract",
     "robotexclusionrulesparser; python_version<'3.11'",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "pytest-asyncio"]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "locust",
+]
 
 [tool.setuptools]
-packages = ["hotel_social_discover"]
+packages = [
+    "hotel_social_discover",
+    "social_discovery_service",
+]
